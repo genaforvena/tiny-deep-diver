@@ -5,6 +5,7 @@ Usage:
     python summarizer.py <youtube_url> --ratio 0.3
     python summarizer.py <youtube_url> --duration 120
     python summarizer.py <youtube_url> --ratio 0.4 --output highlights.mp4 --reencode
+    python summarizer.py <youtube_url> --ratio 0.3 --local   # no API key needed
 """
 
 import argparse
@@ -14,7 +15,6 @@ import tempfile
 from pathlib import Path
 
 from cutter import cut_and_join
-from extract import select_segments
 from transcript import get_transcript, total_duration
 
 
@@ -33,10 +33,16 @@ def main() -> None:
         f"→ {target:.0f}s target ({target / orig_duration * 100:.0f}%)"
     )
 
-    print("→ Selecting key segments with Claude…")
+    if args.local:
+        from extract_local import select_segments
+        print("→ Selecting key segments (local embeddings)…")
+    else:
+        from extract import select_segments
+        print("→ Selecting key segments with Claude…")
+
     selected = select_segments(segments, target)
     if not selected:
-        sys.exit("Error: Claude returned no segments.")
+        sys.exit("Error: no segments were selected.")
 
     kept = sum(s["end"] - s["start"] for s in selected)
     print(f"  {len(selected)} segments selected · {kept:.0f}s total")
@@ -76,6 +82,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--reencode", action="store_true",
         help="Re-encode output (slower but fixes A/V sync issues on some videos)"
+    )
+    p.add_argument(
+        "--local", action="store_true",
+        help="Use local sentence embeddings instead of Claude (no API key needed)"
     )
     args = p.parse_args()
     if args.ratio is None and args.duration is None:

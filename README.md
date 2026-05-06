@@ -63,6 +63,9 @@ Options:
   --duration INT     Target output length in seconds
                      e.g. --duration 120  makes a ~2 minute summary
   --output PATH      Output file (default: summary.mp4)
+  --local            Use local sentence embeddings instead of Claude
+                     (no API key needed; downloads ~80MB model on first run)
+  --reencode         Re-encode with libx264/aac (fixes A/V sync on some videos)
 
 One of --ratio or --duration is required.
 ```
@@ -70,8 +73,11 @@ One of --ratio or --duration is required.
 ### Examples
 
 ```bash
-# Keep the 25% most important content
+# Keep the 25% most important content (uses Claude)
 python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --ratio 0.25
+
+# Same but fully local — no API key needed
+python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --ratio 0.25 --local
 
 # Make a 90-second highlight reel
 python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --duration 90
@@ -79,6 +85,18 @@ python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --duration 90
 # Custom output name
 python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --ratio 0.4 --output highlights.mp4
 ```
+
+### Local vs Claude
+
+| | `--local` | Claude (default) |
+|---|---|---|
+| API key needed | No | Yes |
+| Model download | ~80MB (once) | None |
+| Speed | ~1-2s on CPU | ~2-5s API call |
+| Quality | Good (semantic similarity ranking) | Best (editorial judgement) |
+| Works offline | Yes | No |
+
+The local mode uses `all-MiniLM-L6-v2` via `sentence-transformers`. It embeds every segment, ranks them by cosine similarity to the document centroid, and greedily picks the highest-scoring ones until the duration target is met.
 
 ---
 
