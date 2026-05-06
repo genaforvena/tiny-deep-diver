@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.mp4
+*.mp3
+*.vtt
+*.srt
+summary.mp4
+.env
