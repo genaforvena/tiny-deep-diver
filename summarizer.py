@@ -4,14 +4,21 @@ tiny-deep-diver -- video-to-video summarizer
 Usage:
     python summarizer.py <url> --ratio 0.3
     python summarizer.py <url> --duration 180 --local
+    python summarizer.py <url> --ratio 0.3 --llm-cmd "claude -p"
     python summarizer.py <url> --ratio 1.0 --secondary <url2>
         Select all segments from url, replace matching ones with clips from url2.
+
+Selection backends:
+    default:    LLM CLI (set with --llm-cmd, default 'gemini')
+    --local:    sentence-transformer embeddings, no auth needed
 """
 
 import argparse
+import shlex
 import subprocess
 import sys
 import tempfile
+from functools import partial
 from pathlib import Path
 
 from cutter import cut_and_join
@@ -45,8 +52,9 @@ def main() -> None:
         from extract_local import select_segments
         method = "local embeddings"
     else:
-        from extract import select_segments
-        method = "Claude"
+        from extract import select_segments as _llm_select
+        select_segments = partial(_llm_select, llm_cmd=args.llm_cmd)
+        method = f"LLM CLI ({shlex.split(args.llm_cmd)[0]})"
 
     selected = _iterative_select(
         select_segments, primary_segments, target,
@@ -179,7 +187,12 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--local", action="store_true",
-        help="Use local sentence embeddings instead of Claude (no API key needed)"
+        help="Use local sentence embeddings instead of an LLM CLI (no auth needed)"
+    )
+    p.add_argument(
+        "--llm-cmd", default="gemini", dest="llm_cmd", metavar="CMD",
+        help="LLM CLI to invoke for selection (prompt piped to stdin). "
+             "Default: 'gemini'. Examples: 'claude -p', 'ollama run llama3', 'llm -m gpt-4'."
     )
     p.add_argument(
         "--match-threshold", type=float, default=0.45, dest="match_threshold",

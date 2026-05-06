@@ -1,7 +1,11 @@
 yt-dlp>=2024.1.0
 youtube-transcript-api>=0.6.1
-anthropic>=0.40.0
 ffmpeg-python>=0.2.0
-# local summarization (--local flag); pulls ~80MB model on first run
+# LLM-based selection: install whichever CLI you want and pass via --llm-cmd
+#   gemini (default):  https://github.com/google-gemini/gemini-cli
+#   claude:            https://docs.anthropic.com/claude/docs/claude-code
+#   ollama:            https://ollama.com (for local models)
+#   llm:               pip install llm  (https://llm.datasette.io)
+# local summarization (--local flag); pulls ~130MB model on first run
 sentence-transformers>=3.0.0
 numpy>=1.24.0

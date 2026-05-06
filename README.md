@@ -22,14 +22,15 @@ YouTube URL
     │              (falls back to yt-dlp subtitle download if API unavailable)
     │
     ▼
- Claude API       extractive summarization — selects which segment indices
+ LLM CLI          extractive summarization — selects which segment indices
     │              to keep so total duration ≈ your target
+    │              (gemini by default; any stdin-reading CLI works)
     │
     ▼
  ffmpeg           cuts those segments, concatenates into output .mp4
 ```
 
-The key insight: instead of asking the LLM to paraphrase and then trying to match text back to timestamps, we pass Claude a **numbered list of segments** and ask it to return **indices**. No fuzzy matching, no timestamp alignment risk.
+The key insight: instead of asking the LLM to paraphrase and then trying to match text back to timestamps, we pass it a **numbered list of segments** and ask it to return **indices**. No fuzzy matching, no timestamp alignment risk.
 
 ---
 
@@ -37,18 +38,20 @@ The key insight: instead of asking the LLM to paraphrase and then trying to matc
 
 - Python 3.10+
 - `ffmpeg` on your PATH ([download](https://ffmpeg.org/download.html))
-- An Anthropic API key
+- An LLM CLI of your choice (default: [`gemini`](https://github.com/google-gemini/gemini-cli)).
+  Or use `--local` for fully offline mode — no CLI needed.
 
 Install Python deps:
 ```bash
 pip install -r requirements.txt
 ```
 
-Set your API key:
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...   # Linux/macOS
-$env:ANTHROPIC_API_KEY="sk-ant-..."   # PowerShell
-```
+The LLM CLI manages its own auth — no API keys handled by this tool.
+Common choices:
+- `gemini` — free tier, just `npm install -g @google/gemini-cli` and sign in
+- `claude -p` — set up with Claude Code
+- `ollama run llama3` — fully local, no cloud
+- `llm -m gpt-4` — Simon Willison's `llm` tool, supports many providers
 
 ---
 
@@ -63,8 +66,10 @@ Options:
   --duration INT     Target output length in seconds
                      e.g. --duration 120  makes a ~2 minute summary
   --output PATH      Output file (default: summary.mp4)
-  --local            Use local sentence embeddings instead of Claude
-                     (no API key needed; downloads ~80MB model on first run)
+  --llm-cmd CMD      LLM CLI to invoke (prompt piped to stdin).
+                     Default: 'gemini'. Try 'claude -p', 'ollama run llama3', etc.
+  --local            Use local sentence embeddings instead of an LLM
+                     (no auth needed; downloads ~130MB model on first run)
   --reencode         Re-encode with libx264/aac (fixes A/V sync on some videos)
 
 One of --ratio or --duration is required.
@@ -73,30 +78,33 @@ One of --ratio or --duration is required.
 ### Examples
 
 ```bash
-# Keep the 25% most important content (uses Claude)
+# Keep the 25% most important content (uses gemini CLI)
 python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --ratio 0.25
 
-# Same but fully local — no API key needed
-python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --ratio 0.25 --local
+# Use Claude Code instead
+python summarizer.py "..." --ratio 0.25 --llm-cmd "claude -p"
+
+# Use a fully-local Ollama model
+python summarizer.py "..." --ratio 0.25 --llm-cmd "ollama run llama3"
+
+# Skip the LLM entirely — pure local embeddings
+python summarizer.py "..." --ratio 0.25 --local
 
 # Make a 90-second highlight reel
-python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --duration 90
-
-# Custom output name
-python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --ratio 0.4 --output highlights.mp4
+python summarizer.py "..." --duration 90
 ```
 
-### Local vs Claude
+### LLM CLI vs --local
 
-| | `--local` | Claude (default) |
+| | `--local` | LLM CLI (default) |
 |---|---|---|
-| API key needed | No | Yes |
-| Model download | ~80MB (once) | None |
-| Speed | ~1-2s on CPU | ~2-5s API call |
-| Quality | Good (semantic similarity ranking) | Best (editorial judgement) |
-| Works offline | Yes | No |
+| Auth/CLI install | None | A CLI of your choice |
+| Model download | ~130MB (once) | None (CLI handles it) |
+| Speed | ~2-3s on CPU | ~2-10s per call |
+| Quality | Good (semantic similarity + MMR) | Best (editorial judgement) |
+| Works offline | Yes | Only with offline CLIs (e.g. `ollama`) |
 
-The local mode uses `all-MiniLM-L6-v2` via `sentence-transformers`. It embeds every segment, ranks them by cosine similarity to the document centroid, and greedily picks the highest-scoring ones until the duration target is met.
+The local mode uses `BAAI/bge-small-en-v1.5` via `sentence-transformers`. It embeds every segment and picks the highest-scoring ones via MMR (balances relevance to the document centroid against redundancy with already-selected segments).
 
 ---
 
@@ -106,7 +114,7 @@ The local mode uses `all-MiniLM-L6-v2` via `sentence-transformers`. It embeds ev
 tiny-deep-diver/
 ├── summarizer.py      CLI entry point
 ├── transcript.py      fetch & parse transcript segments from YouTube
-├── extract.py         Claude-based extractive segment selection
+├── extract.py         LLM-CLI-based extractive segment selection
 ├── cutter.py          ffmpeg segment cutting + concatenation
 ├── requirements.txt
 └── docs/

@@ -1,12 +1,14 @@
-"""Tests for extract.py — Claude response parsing."""
+"""Tests for extract.py — LLM CLI invocation and response parsing."""
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch, MagicMock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from extract import _parse_indices, select_segments
+from extract import _parse_indices, select_segments, _run_llm
 
 
 # ── _parse_indices ────────────────────────────────────────────────────────────
@@ -24,8 +26,12 @@ class TestParseIndices:
     def test_plain_code_fence(self):
         assert _parse_indices("```\n[4, 5, 6]\n```") == [4, 5, 6]
 
+    def test_extracts_array_from_preamble(self):
+        # CLIs (esp. gemini) often print banners before the JSON
+        text = "Loaded cached credentials.\n[0, 3, 7]\n"
+        assert _parse_indices(text) == [0, 3, 7]
+
     def test_fallback_extracts_numbers(self):
-        # Claude sometimes adds explanation; numbers should still be extracted
         result = _parse_indices("The key segments are 0, 3, and 7.")
         assert 0 in result
         assert 3 in result
@@ -38,7 +44,40 @@ class TestParseIndices:
         assert _parse_indices("[42]") == [42]
 
 
-# ── select_segments (mocked Claude) ──────────────────────────────────────────
+# ── _run_llm ──────────────────────────────────────────────────────────────────
+
+class TestRunLlm:
+    def test_pipes_prompt_to_stdin(self):
+        with patch("extract.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="[0]", stderr="")
+            _run_llm("gemini", "hello prompt")
+            kwargs = mock_run.call_args.kwargs
+            assert kwargs["input"] == "hello prompt"
+
+    def test_splits_command_with_args(self):
+        with patch("extract.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="[0]", stderr="")
+            _run_llm("claude -p --json", "x")
+            argv = mock_run.call_args.args[0]
+            assert argv == ["claude", "-p", "--json"]
+
+    def test_raises_on_nonzero_exit(self):
+        with patch("extract.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=2, stdout="", stderr="boom")
+            with pytest.raises(RuntimeError, match="failed"):
+                _run_llm("gemini", "x")
+
+    def test_raises_helpful_error_when_cli_missing(self):
+        with patch("extract.subprocess.run", side_effect=FileNotFoundError):
+            with pytest.raises(RuntimeError, match="not found"):
+                _run_llm("nonexistent-cli", "x")
+
+    def test_empty_command_rejected(self):
+        with pytest.raises(ValueError, match="cannot be empty"):
+            _run_llm("", "x")
+
+
+# ── select_segments (mocked CLI) ──────────────────────────────────────────────
 
 SEGMENTS = [
     {"start": 0.0,  "end": 5.0,  "text": "Welcome to the show."},
@@ -50,16 +89,13 @@ SEGMENTS = [
 ]
 
 
-class TestSelectSegments:
-    def _make_response(self, indices: list[int]):
-        import json
-        msg = MagicMock()
-        msg.content = [MagicMock(text=json.dumps(indices))]
-        return msg
+def _mock_cli(stdout: str):
+    return MagicMock(returncode=0, stdout=stdout, stderr="")
 
+
+class TestSelectSegments:
     def test_returns_correct_segments(self):
-        with patch("extract.anthropic.Anthropic") as mock_cls:
-            mock_cls.return_value.messages.create.return_value = self._make_response([0, 2, 4])
+        with patch("extract.subprocess.run", return_value=_mock_cli("[0, 2, 4]")):
             result = select_segments(SEGMENTS, target_duration=15.0)
         assert len(result) == 3
         assert result[0]["text"] == "Welcome to the show."
@@ -67,8 +103,7 @@ class TestSelectSegments:
         assert result[2]["text"] == "The key insight is attention is all you need."
 
     def test_out_of_range_indices_ignored(self):
-        with patch("extract.anthropic.Anthropic") as mock_cls:
-            mock_cls.return_value.messages.create.return_value = self._make_response([0, 99, 2])
+        with patch("extract.subprocess.run", return_value=_mock_cli("[0, 99, 2]")):
             result = select_segments(SEGMENTS, target_duration=10.0)
         assert len(result) == 2
 
@@ -77,9 +112,20 @@ class TestSelectSegments:
         assert result == []
 
     def test_prompt_includes_target_duration(self):
-        with patch("extract.anthropic.Anthropic") as mock_cls:
-            mock_cls.return_value.messages.create.return_value = self._make_response([0])
+        with patch("extract.subprocess.run", return_value=_mock_cli("[0]")) as mock_run:
             select_segments(SEGMENTS, target_duration=9.0)
-            call_kwargs = mock_cls.return_value.messages.create.call_args
-            user_content = call_kwargs.kwargs["messages"][0]["content"]
-            assert "9" in user_content
+            prompt = mock_run.call_args.kwargs["input"]
+            assert "9" in prompt
+            assert "Target output duration" in prompt
+
+    def test_uses_custom_llm_cmd(self):
+        with patch("extract.subprocess.run", return_value=_mock_cli("[0]")) as mock_run:
+            select_segments(SEGMENTS, target_duration=5.0, llm_cmd="claude -p")
+            argv = mock_run.call_args.args[0]
+            assert argv == ["claude", "-p"]
+
+    def test_default_command_is_gemini(self):
+        with patch("extract.subprocess.run", return_value=_mock_cli("[0]")) as mock_run:
+            select_segments(SEGMENTS, target_duration=5.0)
+            argv = mock_run.call_args.args[0]
+            assert argv == ["gemini"]
