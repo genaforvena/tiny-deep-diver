@@ -1,4 +1,4 @@
-"""Tests for cutter.py — concat list generation and error handling."""
+"""Tests for cutter.py -- segment extraction and concatenation."""
 
 import sys
 from pathlib import Path
@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from cutter import _concat, _extract_parts, cut_and_join
+from cutter import cut_and_join
 
 
 SEGMENTS = [
@@ -28,7 +28,6 @@ class TestCutAndJoin:
 
         def fake_run(cmd, **kwargs):
             calls.append(cmd)
-            # create the output file so _concat can find it
             for arg in cmd:
                 if str(arg).endswith(".mp4") and "part_" in str(arg):
                     Path(arg).touch()
@@ -36,7 +35,7 @@ class TestCutAndJoin:
         with patch("cutter._run", side_effect=fake_run):
             cut_and_join("video.mp4", SEGMENTS, str(tmp_path / "out.mp4"))
 
-        # one call per segment + one concat call
+        # one extraction call per segment + one concat call
         assert len(calls) == len(SEGMENTS) + 1
 
     def test_segment_timestamps_passed_to_ffmpeg(self, tmp_path):
@@ -57,6 +56,43 @@ class TestCutAndJoin:
         assert "10.0" in starts
         assert "25.0" in starts
 
+    def test_uses_duration_not_absolute_end(self, tmp_path):
+        """Extraction should use -t (duration) not -to (absolute), for reliable fast-seek."""
+        captured = []
+
+        def fake_run(cmd, **kwargs):
+            captured.append(cmd)
+            for arg in cmd:
+                if str(arg).endswith(".mp4") and "part_" in str(arg):
+                    Path(arg).touch()
+
+        with patch("cutter._run", side_effect=fake_run):
+            cut_and_join("video.mp4", SEGMENTS, str(tmp_path / "out.mp4"))
+
+        extraction_calls = [c for c in captured if "-ss" in c]
+        for cmd in extraction_calls:
+            assert "-t" in cmd
+            assert "-to" not in cmd
+
+    def test_default_copies_video_reencodes_audio(self, tmp_path):
+        """Default: stream-copy video, re-encode audio to fix sync at boundaries."""
+        captured = []
+
+        def fake_run(cmd, **kwargs):
+            captured.append(cmd)
+            for arg in cmd:
+                if str(arg).endswith(".mp4") and "part_" in str(arg):
+                    Path(arg).touch()
+
+        with patch("cutter._run", side_effect=fake_run):
+            cut_and_join("video.mp4", SEGMENTS, str(tmp_path / "out.mp4"))
+
+        extraction_calls = [c for c in captured if "-ss" in c]
+        for cmd in extraction_calls:
+            assert "copy" in cmd           # -c:v copy
+            assert "aac" in cmd            # -c:a aac
+            assert "libx264" not in cmd    # no full re-encode
+
     def test_reencode_flag_uses_libx264(self, tmp_path):
         captured = []
 
@@ -69,10 +105,13 @@ class TestCutAndJoin:
         with patch("cutter._run", side_effect=fake_run):
             cut_and_join("video.mp4", SEGMENTS, str(tmp_path / "out.mp4"), reencode=True)
 
-        all_args = [arg for cmd in captured for arg in cmd]
-        assert "libx264" in all_args
+        extraction_calls = [c for c in captured if "-ss" in c]
+        for cmd in extraction_calls:
+            assert "libx264" in cmd
+            assert "aac" in cmd
 
-    def test_stream_copy_used_by_default(self, tmp_path):
+    def test_concat_uses_stream_copy(self, tmp_path):
+        """Concat step should always stream-copy -- parts already have clean audio."""
         captured = []
 
         def fake_run(cmd, **kwargs):
@@ -84,6 +123,6 @@ class TestCutAndJoin:
         with patch("cutter._run", side_effect=fake_run):
             cut_and_join("video.mp4", SEGMENTS, str(tmp_path / "out.mp4"))
 
-        all_args = [arg for cmd in captured for arg in cmd]
-        assert "copy" in all_args
-        assert "libx264" not in all_args
+        concat_call = next(c for c in captured if "concat" in c)
+        assert "-c" in concat_call
+        assert concat_call[concat_call.index("-c") + 1] == "copy"

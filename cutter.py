@@ -1,13 +1,18 @@
 """
 Cut selected segments from a video file and concatenate them into one output.
 
-Uses ffmpeg stream-copy (-c copy) for speed and lossless quality.
-Falls back to re-encoding if --reencode is passed or if concat fails.
+Default mode: copy video stream (lossless, fast) + re-encode audio as AAC
+(fast -- audio is ~2% of file size). This eliminates the A/V sync drift and
+boundary clicks that occur when stream-copying audio after a keyframe seek.
+
+--reencode: full libx264 + aac re-encode (slower, use for codec issues).
 """
 
 import subprocess
 import tempfile
 from pathlib import Path
+
+_AUDIO_BITRATE = "192k"
 
 
 def cut_and_join(
@@ -25,7 +30,7 @@ def cut_and_join(
 
     with tempfile.TemporaryDirectory() as tmp:
         part_paths = _extract_parts(video_path, segments, tmp, reencode)
-        _concat(part_paths, output_path, reencode)
+        _concat(part_paths, output_path)
 
 
 # ── extraction ────────────────────────────────────────────────────────────────
@@ -39,17 +44,19 @@ def _extract_parts(
     parts = []
     for i, seg in enumerate(segments):
         out = Path(tmp) / f"part_{i:04d}.mp4"
+        duration = seg["end"] - seg["start"]
         cmd = [
             "ffmpeg", "-y",
-            "-ss", str(seg["start"]),
-            "-to", str(seg["end"]),
+            "-ss", str(seg["start"]),   # fast input seek to nearest keyframe
             "-i", video_path,
+            "-t", str(duration),        # duration from seek point (more reliable than -to)
         ]
         if reencode:
-            cmd += ["-c:v", "libx264", "-c:a", "aac", "-preset", "fast"]
+            cmd += ["-c:v", "libx264", "-c:a", "aac", "-b:a", _AUDIO_BITRATE, "-preset", "fast"]
         else:
-            cmd += ["-c", "copy"]
-        cmd += ["-avoid_negative_ts", "make_zero", str(out)]
+            # copy video (lossless, instant) + re-encode audio (fixes sync at boundaries)
+            cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", _AUDIO_BITRATE]
+        cmd += [str(out)]
         _run(cmd)
         parts.append(out)
     return parts
@@ -57,24 +64,21 @@ def _extract_parts(
 
 # ── concatenation ─────────────────────────────────────────────────────────────
 
-def _concat(parts: list[Path], output_path: str, reencode: bool) -> None:
+def _concat(parts: list[Path], output_path: str) -> None:
     concat_list = parts[0].parent / "concat.txt"
     concat_list.write_text(
         "\n".join(f"file '{p}'" for p in parts),
         encoding="utf-8",
     )
-    cmd = [
+    # parts already have clean audio; stream-copy the whole concat
+    _run([
         "ffmpeg", "-y",
         "-f", "concat",
         "-safe", "0",
         "-i", str(concat_list),
-    ]
-    if reencode:
-        cmd += ["-c:v", "libx264", "-c:a", "aac", "-preset", "fast"]
-    else:
-        cmd += ["-c", "copy"]
-    cmd += [output_path]
-    _run(cmd)
+        "-c", "copy",
+        output_path,
+    ])
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
