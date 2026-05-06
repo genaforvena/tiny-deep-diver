@@ -21,7 +21,7 @@ from transcript import get_transcript, total_duration
 def main() -> None:
     args = _parse_args()
 
-    print("→ Fetching transcript…")
+    print("-> Fetching transcript…")
     segments = get_transcript(args.url)
     if not segments:
         sys.exit("Error: could not retrieve transcript for this video.")
@@ -30,15 +30,15 @@ def main() -> None:
     target = _resolve_target(args, orig_duration)
     print(
         f"  {len(segments)} segments · {orig_duration:.0f}s original "
-        f"→ {target:.0f}s target ({target / orig_duration * 100:.0f}%)"
+        f"-> {target:.0f}s target ({target / orig_duration * 100:.0f}%)"
     )
 
     if args.local:
         from extract_local import select_segments
-        print("→ Selecting key segments (local embeddings)…")
+        print("-> Selecting key segments (local embeddings)…")
     else:
         from extract import select_segments
-        print("→ Selecting key segments with Claude…")
+        print("-> Selecting key segments with Claude…")
 
     selected = select_segments(segments, target)
     if not selected:
@@ -50,12 +50,12 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         video_path = _download_video(args.url, tmp)
 
-        print("→ Cutting and joining…")
+        print("-> Cutting and joining…")
         cut_and_join(video_path, selected, args.output, reencode=args.reencode)
 
-    print(f"\n✓ Done: {args.output}")
+    print(f"\nDone: {args.output}")
     print(
-        f"  {orig_duration:.0f}s → {kept:.0f}s "
+        f"  {orig_duration:.0f}s -> {kept:.0f}s "
         f"({kept / orig_duration * 100:.0f}% of original)"
     )
 
@@ -103,10 +103,10 @@ def _resolve_target(args: argparse.Namespace, orig_duration: float) -> float:
 
 def _download_video(url: str, tmp: str) -> str:
     out_template = str(Path(tmp) / "video.%(ext)s")
-    print("→ Downloading video…")
+    print("-> Downloading video…")
     result = subprocess.run(
         [
-            "yt-dlp",
+            "python", "-m", "yt_dlp",
             "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "--merge-output-format", "mp4",
             "--output", out_template,

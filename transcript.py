@@ -36,11 +36,12 @@ def _from_transcript_api(url: str) -> list[dict]:
     from youtube_transcript_api import YouTubeTranscriptApi
 
     video_id = _extract_video_id(url)
-    raw = YouTubeTranscriptApi.get_transcript(video_id)
+    # v1.x uses an instance; fetch() returns an iterable of FetchedTranscriptSnippet
+    raw = YouTubeTranscriptApi().fetch(video_id)
     segments = [
-        {"start": e["start"], "end": e["start"] + e["duration"], "text": e["text"].strip()}
+        {"start": e.start, "end": e.start + e.duration, "text": e.text.strip()}
         for e in raw
-        if e.get("text", "").strip()
+        if e.text.strip()
     ]
     return _merge_short(segments)
 
@@ -51,7 +52,7 @@ def _from_yt_dlp(url: str) -> list[dict]:
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(
             [
-                "yt-dlp",
+                "python", "-m", "yt_dlp",
                 "--write-auto-subs",
                 "--skip-download",
                 "--sub-lang", "en",
