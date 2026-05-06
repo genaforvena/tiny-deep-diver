@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 from cutter import cut_and_join
+from preprocess import preprocess, apply_padding
 from transcript import get_transcript, total_duration
 
 _CONVERGENCE_TOL = 0.12
@@ -35,6 +36,10 @@ def main() -> None:
         f"  {len(primary_segments)} segments, {orig_duration:.0f}s original "
         f"-> {target:.0f}s target ({target / orig_duration * 100:.0f}%)"
     )
+
+    print("-> Preprocessing segments...")
+    primary_segments = preprocess(primary_segments)
+    print(f"  {len(primary_segments)} segments after grouping/pruning")
 
     if args.local:
         from extract_local import select_segments
@@ -75,9 +80,13 @@ def main() -> None:
         else:
             secondary_path = primary_path
 
+        # apply boundary padding right before cutting (after matching so padding
+        # doesn't affect similarity scores)
+        padded = apply_padding(matched, orig_duration)
+
         clips = [
             (secondary_path if seg["_source"] == "secondary" else primary_path, seg)
-            for seg in matched
+            for seg in padded
         ]
 
         print("-> Cutting and joining...")
