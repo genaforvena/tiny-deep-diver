@@ -2,10 +2,10 @@
 tiny-deep-diver -- video-to-video summarizer
 
 Usage:
-    python summarizer.py <youtube_url> --ratio 0.3
-    python summarizer.py <youtube_url> --duration 120
-    python summarizer.py <youtube_url> --duration 180 --passes 3
-    python summarizer.py <youtube_url> --ratio 0.3 --local   # no API key needed
+    python summarizer.py <url> --ratio 0.3
+    python summarizer.py <url> --duration 180 --local
+    python summarizer.py <url> --ratio 1.0 --secondary <url2>
+        Select all segments from url, replace matching ones with clips from url2.
 """
 
 import argparse
@@ -17,22 +17,22 @@ from pathlib import Path
 from cutter import cut_and_join
 from transcript import get_transcript, total_duration
 
-_CONVERGENCE_TOL = 0.12   # stop when within 12% of target duration
+_CONVERGENCE_TOL = 0.12
 _MAX_AUTO_PASSES = 6
 
 
 def main() -> None:
     args = _parse_args()
 
-    print("-> Fetching transcript...")
-    segments = get_transcript(args.url)
-    if not segments:
-        sys.exit("Error: could not retrieve transcript for this video.")
+    print("-> Fetching primary transcript...")
+    primary_segments = get_transcript(args.url)
+    if not primary_segments:
+        sys.exit("Error: could not retrieve transcript for primary video.")
 
-    orig_duration = total_duration(segments)
+    orig_duration = total_duration(primary_segments)
     target = _resolve_target(args, orig_duration)
     print(
-        f"  {len(segments)} segments, {orig_duration:.0f}s original "
+        f"  {len(primary_segments)} segments, {orig_duration:.0f}s original "
         f"-> {target:.0f}s target ({target / orig_duration * 100:.0f}%)"
     )
 
@@ -44,7 +44,7 @@ def main() -> None:
         method = "Claude"
 
     selected = _iterative_select(
-        select_segments, segments, target,
+        select_segments, primary_segments, target,
         max_passes=args.passes, method=method,
     )
     if not selected:
@@ -52,10 +52,36 @@ def main() -> None:
 
     kept = sum(s["end"] - s["start"] for s in selected)
 
+    # ── secondary video substitution ──────────────────────────────────────────
+    secondary_url = args.secondary
+    if secondary_url:
+        print("-> Fetching secondary transcript...")
+        secondary_segments = get_transcript(secondary_url)
+        print(
+            f"  {len(secondary_segments)} segments, "
+            f"{total_duration(secondary_segments):.0f}s"
+        )
+        from match import find_matches, match_summary
+        print("-> Matching segments to secondary video...")
+        matched = find_matches(selected, secondary_segments)
+        print(f"  {match_summary(matched)}")
+    else:
+        matched = [dict(s, _source="primary") for s in selected]
+
     with tempfile.TemporaryDirectory() as tmp:
-        video_path = _download_video(args.url, tmp)
+        primary_path = _download_video(args.url, tmp, label="primary")
+        if secondary_url:
+            secondary_path = _download_video(secondary_url, tmp, label="secondary")
+        else:
+            secondary_path = primary_path
+
+        clips = [
+            (secondary_path if seg["_source"] == "secondary" else primary_path, seg)
+            for seg in matched
+        ]
+
         print("-> Cutting and joining...")
-        cut_and_join(video_path, selected, args.output, reencode=args.reencode)
+        cut_and_join(clips, args.output, reencode=args.reencode)
 
     print(f"\nDone: {args.output}")
     print(
@@ -77,21 +103,16 @@ def _iterative_select(
     Repeatedly apply select_fn, feeding each pass's output as the next
     pass's input, until the result is within _CONVERGENCE_TOL of target
     or max_passes is reached.
-
-    Why this works: each pass operates on an already-curated pool, so the
-    centroid shifts toward core content and subsequent passes make finer
-    distinctions. Very aggressive ratios converge in 2-3 passes.
     """
     pool = segments
     selected = segments
-    auto = max_passes == 0   # 0 means auto until converged
+    auto = max_passes == 0
 
     limit = _MAX_AUTO_PASSES if auto else max_passes
 
     for pass_num in range(1, limit + 1):
         kept_before = sum(s["end"] - s["start"] for s in pool)
         if kept_before <= target * (1 + _CONVERGENCE_TOL):
-            # pool is already close enough — no point running another pass
             selected = pool
             break
 
@@ -109,10 +130,9 @@ def _iterative_select(
             break
 
         if kept <= target:
-            # undershot: can't cut further without losing below target
             break
 
-        pool = selected  # feed this pass's output into the next pass
+        pool = selected
 
     return selected
 
@@ -123,10 +143,14 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Summarize a YouTube video into a shorter video using key segments."
     )
-    p.add_argument("url", help="YouTube video URL")
+    p.add_argument("url", help="Primary YouTube video URL")
+    p.add_argument(
+        "--secondary", default=None, metavar="URL",
+        help="Optional second YouTube URL; matching segments replace primary clips"
+    )
     p.add_argument(
         "--ratio", type=float, default=None,
-        help="Keep this fraction of original duration (0.0-1.0)"
+        help="Keep this fraction of original duration (0.0-1.0). Use 1.0 for no compression."
     )
     p.add_argument(
         "--duration", type=float, default=None,
@@ -148,11 +172,15 @@ def _parse_args() -> argparse.Namespace:
         "--local", action="store_true",
         help="Use local sentence embeddings instead of Claude (no API key needed)"
     )
+    p.add_argument(
+        "--match-threshold", type=float, default=0.45, dest="match_threshold",
+        help="Cosine similarity threshold for secondary matching (default: 0.45)"
+    )
     args = p.parse_args()
     if args.ratio is None and args.duration is None:
         p.error("One of --ratio or --duration is required.")
     if args.ratio is not None and not (0.0 < args.ratio <= 1.0):
-        p.error("--ratio must be between 0.0 and 1.0 (exclusive).")
+        p.error("--ratio must be between 0.0 and 1.0.")
     if args.passes < 0:
         p.error("--passes must be >= 0.")
     return args
@@ -164,9 +192,10 @@ def _resolve_target(args: argparse.Namespace, orig_duration: float) -> float:
     return args.ratio * orig_duration
 
 
-def _download_video(url: str, tmp: str) -> str:
-    out_template = str(Path(tmp) / "video.%(ext)s")
-    print("-> Downloading video...")
+def _download_video(url: str, tmp: str, label: str = "") -> str:
+    tag = f" ({label})" if label else ""
+    print(f"-> Downloading video{tag}...")
+    out_template = str(Path(tmp) / f"video_{label}.%(ext)s")
     result = subprocess.run(
         [
             "python", "-m", "yt_dlp",
@@ -179,11 +208,11 @@ def _download_video(url: str, tmp: str) -> str:
         text=True,
     )
     if result.returncode != 0:
-        sys.exit(f"Error downloading video:\n{result.stderr[-1000:]}")
+        sys.exit(f"Error downloading video{tag}:\n{result.stderr[-1000:]}")
 
-    mp4_files = list(Path(tmp).glob("*.mp4"))
+    mp4_files = list(Path(tmp).glob(f"video_{label}*.mp4"))
     if not mp4_files:
-        sys.exit("Error: yt-dlp did not produce an .mp4 file.")
+        sys.exit(f"Error: yt-dlp did not produce an .mp4 file for {label}.")
     return str(mp4_files[0])
 
 
