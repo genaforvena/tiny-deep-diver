@@ -77,21 +77,74 @@ One of --ratio or --duration is required.
 
 ### Examples
 
+**Compression by ratio or duration**
 ```bash
-# Keep the 25% most important content (uses gemini CLI)
+# Keep the 25% most important content (uses gemini CLI by default)
 python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --ratio 0.25
 
-# Use Claude Code instead
-python summarizer.py "..." --ratio 0.25 --llm-cmd "claude -p"
-
-# Use a fully-local Ollama model
-python summarizer.py "..." --ratio 0.25 --llm-cmd "ollama run llama3"
-
-# Skip the LLM entirely — pure local embeddings
-python summarizer.py "..." --ratio 0.25 --local
-
 # Make a 90-second highlight reel
-python summarizer.py "..." --duration 90
+python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" --duration 90
+
+# Custom output filename
+python summarizer.py "https://youtube.com/watch?v=dQw4w9WgXcQ" \
+    --ratio 0.4 --output highlights.mp4
+```
+
+**Pick your LLM backend**
+```bash
+# Default: Google's gemini CLI (free tier)
+python summarizer.py "<url>" --ratio 0.3
+
+# Claude Code
+python summarizer.py "<url>" --ratio 0.3 --llm-cmd "claude -p"
+
+# Local Ollama model — fully offline, no cloud
+python summarizer.py "<url>" --ratio 0.3 --llm-cmd "ollama run llama3"
+
+# Simon Willison's `llm` tool (supports OpenAI, Mistral, etc.)
+python summarizer.py "<url>" --ratio 0.3 --llm-cmd "llm -m gpt-4o"
+
+# Any custom CLI that reads stdin and writes a JSON array on stdout
+python summarizer.py "<url>" --ratio 0.3 --llm-cmd "./my-llm-wrapper.sh"
+```
+
+**Skip the LLM entirely**
+```bash
+# Pure local embeddings — no auth, no CLI, ~130MB model on first run
+python summarizer.py "<url>" --ratio 0.25 --local
+```
+
+**Multi-pass compression**
+```bash
+# Default: auto-iterate until within 12% of target (max 6 passes)
+python summarizer.py "<url>" --duration 180
+
+# Force exactly 3 passes (each pass feeds the previous output as input)
+python summarizer.py "<url>" --duration 180 --passes 3
+
+# Single pass only
+python summarizer.py "<url>" --duration 180 --passes 1
+```
+
+**Secondary video substitution**
+
+Selected segments are matched against a second video; matches are replaced by the corresponding clip from the second source. Useful for stitching alternate takes, dubbed versions, or remix material.
+```bash
+# Keep all primary segments, replace those that match secondary
+python summarizer.py "<primary_url>" --ratio 1.0 --secondary "<other_url>"
+
+# Compress to 30% AND replace matches with secondary clips
+python summarizer.py "<primary_url>" --ratio 0.3 --secondary "<other_url>"
+
+# Loosen the match threshold (default 0.45 cosine similarity)
+python summarizer.py "<primary_url>" --secondary "<other_url>" \
+    --ratio 1.0 --match-threshold 0.35
+```
+
+**Quality / encoding tweaks**
+```bash
+# Re-encode output if you hit A/V sync issues on the default stream-copy path
+python summarizer.py "<url>" --ratio 0.3 --reencode
 ```
 
 ### LLM CLI vs --local
