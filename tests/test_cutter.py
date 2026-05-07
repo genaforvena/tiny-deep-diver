@@ -123,6 +123,42 @@ class TestCutAndJoin:
         concat_call = next(c for c in captured if "concat" in c)
         assert concat_call[concat_call.index("-c") + 1] == "copy"
 
+    def test_raises_on_overlapping_clips_same_source(self, tmp_path):
+        # two clips from the same video that overlap — must be rejected
+        # before any ffmpeg call so the same frames cannot end up in the
+        # output twice
+        bad_clips = [
+            (VIDEO_A, {"start": 0.0, "end": 10.0, "text": "a"}),
+            (VIDEO_A, {"start": 9.0, "end": 15.0, "text": "b"}),
+        ]
+        with pytest.raises(ValueError, match="overlap"):
+            cut_and_join(bad_clips, str(tmp_path / "out.mp4"))
+
+    def test_raises_on_out_of_order_clips_same_source(self, tmp_path):
+        bad_clips = [
+            (VIDEO_A, {"start": 20.0, "end": 25.0, "text": "later"}),
+            (VIDEO_A, {"start": 0.0, "end": 5.0, "text": "earlier"}),
+        ]
+        with pytest.raises(ValueError, match="overlap|order"):
+            cut_and_join(bad_clips, str(tmp_path / "out.mp4"))
+
+    def test_overlap_check_is_per_source(self, tmp_path):
+        # same time range from two different source videos is fine —
+        # each source contributes that range exactly once to the output
+        ok_clips = [
+            (VIDEO_A, {"start": 0.0, "end": 10.0, "text": "a"}),
+            (VIDEO_B, {"start": 0.0, "end": 10.0, "text": "b"}),
+        ]
+
+        def fake_run(cmd, **kw):
+            for arg in cmd:
+                if str(arg).endswith(".mp4") and "part_" in str(arg):
+                    Path(arg).touch()
+
+        with patch("cutter._run", side_effect=fake_run):
+            cut_and_join(ok_clips, str(tmp_path / "out.mp4"))
+        # no exception = pass
+
     def test_mixed_source_videos(self, tmp_path):
         """Clips from different source files should each use their own -i path."""
         mixed_clips = [

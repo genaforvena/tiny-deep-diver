@@ -30,9 +30,33 @@ def cut_and_join(
     if not clips:
         raise ValueError("No clips to cut")
 
+    _assert_no_overlap_per_source(clips)
+
     with tempfile.TemporaryDirectory() as tmp:
         part_paths = _extract_parts(clips, tmp, reencode)
         _concat(part_paths, output_path)
+
+
+# ── invariants ────────────────────────────────────────────────────────────────
+
+def _assert_no_overlap_per_source(clips: list[tuple[str, dict]]) -> None:
+    """
+    Per-source subset invariant: for each source video, clips drawn from it
+    must be in chronological order with no overlap. The output must never
+    contain the same source frame twice.
+    """
+    last_end: dict[str, float] = {}
+    last_index: dict[str, int] = {}
+    for i, (path, seg) in enumerate(clips):
+        prev_end = last_end.get(path)
+        if prev_end is not None and seg["start"] < prev_end:
+            raise ValueError(
+                f"clips for {path} overlap or are out of order at index {i} "
+                f"(prev clip #{last_index[path]} ends at {prev_end}, "
+                f"this clip starts at {seg['start']})"
+            )
+        last_end[path] = seg["end"]
+        last_index[path] = i
 
 
 # ── extraction ────────────────────────────────────────────────────────────────

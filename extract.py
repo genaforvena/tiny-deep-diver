@@ -59,7 +59,13 @@ def select_segments(
 
     response_text = _run_llm(llm_cmd, prompt)
     indices = _parse_indices(response_text)
-    return [segments[i] for i in indices if 0 <= i < len(segments)]
+
+    # dedup (preserve first occurrence) + drop out-of-range, then sort
+    # chronologically — guarantees no segment is repeated in the output
+    seen: set[int] = set()
+    deduped = [i for i in indices if 0 <= i < len(segments) and not (i in seen or seen.add(i))]
+    deduped.sort()
+    return [segments[i] for i in deduped]
 
 
 def _run_llm(llm_cmd: str, prompt: str) -> str:

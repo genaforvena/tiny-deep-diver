@@ -142,13 +142,31 @@ def group_sentences(segments: list[dict]) -> list[dict]:
 def apply_padding(segments: list[dict], total_duration: float, pad: float = PAD_SECS) -> list[dict]:
     """
     Expand each segment by `pad` seconds on each side, clamped to [0, total_duration].
+    Adjacent padded ranges are clamped to a shared midpoint so the output never
+    contains the same source frame twice (subset-only invariant).
     Call this on the *selected* segments before passing to cutter.
     """
-    result = []
-    for seg in segments:
-        result.append({
+    if not segments:
+        return []
+
+    # tentative padding per segment, clamped to [0, total]
+    padded = [
+        {
             **seg,
             "start": max(0.0, seg["start"] - pad),
             "end": min(total_duration, seg["end"] + pad),
-        })
-    return result
+        }
+        for seg in segments
+    ]
+
+    # resolve overlaps between adjacent padded ranges by sharing the midpoint
+    # of the original gap, so neither side claims frames the other does
+    for i in range(1, len(padded)):
+        prev, curr = padded[i - 1], padded[i]
+        if prev["end"] > curr["start"]:
+            mid = (segments[i - 1]["end"] + segments[i]["start"]) / 2.0
+            mid = max(prev["start"], min(curr["end"], mid))
+            prev["end"] = mid
+            curr["start"] = mid
+
+    return padded

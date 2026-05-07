@@ -129,3 +129,15 @@ class TestSelectSegments:
             select_segments(SEGMENTS, target_duration=5.0)
             argv = mock_run.call_args.args[0]
             assert argv == ["gemini"]
+
+    def test_dedups_and_sorts_indices(self):
+        # LLM returns duplicates and out-of-order indices — output must be
+        # a chronologically ordered subset with each segment appearing once
+        with patch("extract.subprocess.run", return_value=_mock_cli("[2, 0, 0, 1, 2]")):
+            result = select_segments(SEGMENTS, target_duration=15.0)
+        texts = [r["text"] for r in result]
+        assert texts == [
+            SEGMENTS[0]["text"],
+            SEGMENTS[1]["text"],
+            SEGMENTS[2]["text"],
+        ]

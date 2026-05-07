@@ -114,3 +114,25 @@ class TestApplyPadding:
 
     def test_empty_passthrough(self):
         assert apply_padding([], total_duration=60.0) == []
+
+    def test_clamps_overlap_with_neighbor(self):
+        # gap of 0.1s < 2*PAD_SECS would overlap if padded independently
+        segs = [_seg(0.0, 10.0, "a"), _seg(10.1, 20.0, "b")]
+        result = apply_padding(segs, total_duration=60.0)
+        assert result[0]["end"] <= result[1]["start"], (
+            f"adjacent padded ranges overlap: "
+            f"{result[0]['end']} > {result[1]['start']}"
+        )
+
+    def test_clamps_at_zero_gap(self):
+        # touching segments — padding must not create an overlap
+        segs = [_seg(0.0, 10.0, "a"), _seg(10.0, 20.0, "b")]
+        result = apply_padding(segs, total_duration=60.0)
+        assert result[0]["end"] <= result[1]["start"]
+
+    def test_non_adjacent_padding_unaffected(self):
+        # large gap — full padding on both sides should remain
+        segs = [_seg(0.0, 10.0, "a"), _seg(30.0, 40.0, "b")]
+        result = apply_padding(segs, total_duration=60.0)
+        assert result[0]["end"] == 10.0 + PAD_SECS
+        assert result[1]["start"] == 30.0 - PAD_SECS
